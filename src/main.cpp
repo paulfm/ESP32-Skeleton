@@ -52,7 +52,7 @@ WebServer server(80);
 
 constexpr uint8_t EYES_PIN = 1;
 constexpr uint8_t EYES_PWM_CHANNEL = 1;
-constexpr uint32_t EYES_PWM_FREQUENCY = 5000;
+constexpr uint32_t EYES_PWM_FREQUENCY = 1000;
 constexpr uint8_t EYES_PWM_RESOLUTION = 8;
 
 constexpr unsigned long EYES_FADE_TIME = 5000;
@@ -156,9 +156,21 @@ void updateHeartbeat()
     ledcWrite(HEART_PWM_CHANNEL, brightness);
 }
 
+uint8_t perceptualBrightness(uint8_t linearBrightness)
+{
+    constexpr uint8_t MAX_EYE_BRIGHTNESS = 200;
+
+    uint32_t value = linearBrightness;
+    uint32_t corrected =
+        (value * value * value) / 65025UL;
+
+    return static_cast<uint8_t>(
+        (corrected * MAX_EYE_BRIGHTNESS) / 255UL
+    );
+}
+
 void updateEyes()
 {
-    // outputs[2] is the GPIO1 skeleton-eyes output.
     if (!outputs[2].isOn)
     {
         ledcWrite(EYES_PWM_CHANNEL, 0);
@@ -169,12 +181,12 @@ void updateEyes()
         (millis() - eyesFadeStartTime) %
         EYES_CYCLE_TIME;
 
-    uint8_t brightness;
+    uint8_t linearBrightness;
 
     if (cyclePosition < EYES_FADE_TIME)
     {
-        // Slowly brighten from off to full brightness.
-        brightness = fadeBetween(
+        // Five-second fade from off to full brightness.
+        linearBrightness = fadeBetween(
             cyclePosition,
             0,
             EYES_FADE_TIME,
@@ -184,8 +196,8 @@ void updateEyes()
     }
     else
     {
-        // Slowly fade from full brightness back to off.
-        brightness = fadeBetween(
+        // Five-second fade from full brightness to off.
+        linearBrightness = fadeBetween(
             cyclePosition,
             EYES_FADE_TIME,
             EYES_CYCLE_TIME,
@@ -194,7 +206,13 @@ void updateEyes()
         );
     }
 
-    ledcWrite(EYES_PWM_CHANNEL, brightness);
+    uint8_t correctedBrightness =
+        perceptualBrightness(linearBrightness);
+
+    ledcWrite(
+        EYES_PWM_CHANNEL,
+        correctedBrightness
+    );
 }
 
 void setOutput(size_t index, bool turnOn)
