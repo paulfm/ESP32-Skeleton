@@ -25,8 +25,8 @@ struct OutputControl
 OutputControl outputs[] =
 {
     {"Onboard LED", "onboard", 8, false},
-    {"External LED - IO0", "io0", 0, false},
-    {"External LED - IO1", "io1", 1, false},
+    {"Skeleton Body - IO0", "io0", 0, false},
+    {"Skeleton Eyes - IO1", "io1", 1, false},
     {"Skeleton Heart - IO3", "io3", 3, false}
 };
 
@@ -45,6 +45,21 @@ constexpr size_t OUTPUT_COUNT =
     sizeof(outputs) / sizeof(outputs[0]);
 
 WebServer server(80);
+
+// ---------------------------------------------------------
+// Skeleton eye-fade settings
+// ---------------------------------------------------------
+
+constexpr uint8_t EYES_PIN = 1;
+constexpr uint8_t EYES_PWM_CHANNEL = 1;
+constexpr uint32_t EYES_PWM_FREQUENCY = 5000;
+constexpr uint8_t EYES_PWM_RESOLUTION = 8;
+
+constexpr unsigned long EYES_FADE_TIME = 5000;
+constexpr unsigned long EYES_CYCLE_TIME =
+    EYES_FADE_TIME * 2;
+
+unsigned long eyesFadeStartTime = 0;
 
 // ---------------------------------------------------------
 // Output control
@@ -141,6 +156,47 @@ void updateHeartbeat()
     ledcWrite(HEART_PWM_CHANNEL, brightness);
 }
 
+void updateEyes()
+{
+    // outputs[2] is the GPIO1 skeleton-eyes output.
+    if (!outputs[2].isOn)
+    {
+        ledcWrite(EYES_PWM_CHANNEL, 0);
+        return;
+    }
+
+    unsigned long cyclePosition =
+        (millis() - eyesFadeStartTime) %
+        EYES_CYCLE_TIME;
+
+    uint8_t brightness;
+
+    if (cyclePosition < EYES_FADE_TIME)
+    {
+        // Slowly brighten from off to full brightness.
+        brightness = fadeBetween(
+            cyclePosition,
+            0,
+            EYES_FADE_TIME,
+            0,
+            255
+        );
+    }
+    else
+    {
+        // Slowly fade from full brightness back to off.
+        brightness = fadeBetween(
+            cyclePosition,
+            EYES_FADE_TIME,
+            EYES_CYCLE_TIME,
+            255,
+            0
+        );
+    }
+
+    ledcWrite(EYES_PWM_CHANNEL, brightness);
+}
+
 void setOutput(size_t index, bool turnOn)
 {
     if (index >= OUTPUT_COUNT)
@@ -155,17 +211,22 @@ void setOutput(size_t index, bool turnOn)
         if (turnOn)
         {
             heartbeatStartTime = millis();
-            ledcWrite(HEART_PWM_CHANNEL, 0);
         }
-        else
+
+        ledcWrite(HEART_PWM_CHANNEL, 0);
+    }
+    else if (outputs[index].pin == EYES_PIN)
+    {
+        if (turnOn)
         {
-            ledcWrite(HEART_PWM_CHANNEL, 0);
+            eyesFadeStartTime = millis();
         }
+
+        ledcWrite(EYES_PWM_CHANNEL, 0);
     }
     else
     {
-        // GPIO 8, GPIO 0, and GPIO 1 remain
-        // ordinary active-high outputs.
+        // GPIO8 and GPIO0 are ordinary active-high outputs.
         digitalWrite(
             outputs[index].pin,
             turnOn ? HIGH : LOW
@@ -626,17 +687,20 @@ void setup()
     Serial.println("ESP32-C3 Multi-LED Web Control");
     Serial.println("=============================");
 
-    // Configure all four outputs and start them off.
-    // Configure the three ordinary LED outputs.
+// Configure the ordinary digital outputs.
+// GPIO1 and GPIO3 are controlled by PWM.
 for (size_t i = 0; i < OUTPUT_COUNT; i++)
 {
-    if (outputs[i].pin != HEART_PIN)
+    if (
+        outputs[i].pin != HEART_PIN &&
+        outputs[i].pin != EYES_PIN
+    )
     {
         pinMode(outputs[i].pin, OUTPUT);
     }
 }
 
-// Configure IO3 for PWM brightness control.
+// Configure GPIO3 for the heartbeat PWM animation.
 ledcSetup(
     HEART_PWM_CHANNEL,
     HEART_PWM_FREQUENCY,
@@ -648,11 +712,23 @@ ledcAttachPin(
     HEART_PWM_CHANNEL
 );
 
-// Start every output in the off state.
-for (size_t i = 0; i < OUTPUT_COUNT; i++)
-{
-    setOutput(i, false);
-}
+// Configure GPIO1 for the eye-fade PWM animation.
+ledcSetup(
+    EYES_PWM_CHANNEL,
+    EYES_PWM_FREQUENCY,
+    EYES_PWM_RESOLUTION
+);
+
+ledcAttachPin(
+    EYES_PIN,
+    EYES_PWM_CHANNEL
+);
+
+// Establish the desired power-up states.
+setOutput(0, false);  // Onboard LED off
+setOutput(1, true);   // Skeleton body on steadily
+setOutput(2, true);   // Eye fade starts automatically
+setOutput(3, true);   // Heartbeat starts automatically
 
     connectToWiFi();
 
@@ -701,6 +777,7 @@ void loop()
 {
     server.handleClient();
     updateHeartbeat();
+    updateEyes();
     
     static unsigned long lastStatusTime = 0;
 
